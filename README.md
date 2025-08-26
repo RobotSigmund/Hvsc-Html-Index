@@ -1,5 +1,5 @@
 # Hvsc-Html-Index
-Generate a searchable html file with multiple sorting options.
+Generate an offline searchable html hvsc-sid-file-index with multiple sorting options.
 
 <img width="950" height="704" alt="image" src="https://github.com/user-attachments/assets/cae98047-8276-491e-9a47-eca3a9ac4787" />
 
