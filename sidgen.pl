@@ -3,6 +3,9 @@
 use strict;
 use Time::Local;
 use utf8;
+use Encode;
+use HTML::Entities;
+use URI::Escape;
 
 # Win11 cmd.exe char-encoding. Use "chcp" to check.
 use open qw(:std :encoding(cp437));
@@ -36,6 +39,8 @@ print 'ok' . "\n";
 
 
 print 'Generating HTML...';
+my $html_listjs_instance = '<script src="' . ((-e 'List.js/list.min.js') ? 'List.js/list.min.js' : 'https://cdnjs.cloudflare.com/ajax/libs/list.js/2.3.1/list.min.js') . '"></script>';
+my $html_generated_datetime = 'Generated ' . FormatTime();
 open(my $FILE, '>:encoding(UTF-8)', 'C64.html');
 print $FILE <<EOM;
 <!DOCTYPE html>
@@ -43,33 +48,31 @@ print $FILE <<EOM;
 <head>
 <meta charset="utf-8">
 <title>HVSC chronological order!</title>
-<script src="List.js/list.min.js"></script>
+$html_listjs_instance
 <style>
 body, th, td {
-font-family: monospace;
-text-align: left;
-white-space: nowrap;
+ font-family: monospace;
+ text-align: left;
+ white-space: nowrap;
 }
 table {
-border-collapse: collapse;
+ border-collapse: collapse;
 }
 tr:nth-child(even) {
-background-color: #f5f5f5;
+ background-color: #f5f5f5;
 }
 th {
-background-color: #eeeeee;
+ background-color: #eeeeee;
 }
 .sort-link {
-text-decoration: none;
+ text-decoration: none;
 }
 </style>
 </head>
 <body>
 <!--
 
-EOM
-print $FILE 'Generated ' . FormatTime() . "\n";
-print $FILE <<EOM;
+$html_generated_datetime
 www.straumland.com
 
 -->
@@ -106,10 +109,10 @@ print $FILE <<EOM;
 </table>
 </div>
 <script>
-var options = {
-valueNames: [ 'id', 'released', 'title', 'author', 'folder', 'songlength' ]
+ var options = {
+ valueNames: [ 'id', 'released', 'title', 'author', 'folder', 'songlength' ]
 };
-var userList = new List(\'hvsc\', options);
+var userList = new List('hvsc', options);
 </script>
 <p>Powered by <a href="https://listjs.com/">List.js</a></p>
 </body>
@@ -121,7 +124,6 @@ print 'ok' . "\n";
 
 
 print 'DONE!' . "\n\n";
-print 'Open "C64.html" in Chrome browser. It still supports opening local links with filetype selected software.' . "\n";
 sleep(5);
 exit;
 
@@ -151,43 +153,50 @@ sub ReadSonglengthsFile {
 
 sub readdirs {
 	my($folder, $filelist_ref) = @_;
-	
+		
 	# Open dir
 	opendir(my $DIR, $folder);
 	foreach my $de (readdir($DIR)) {
 		next if (($de eq '.') || ($de eq '..'));
 		
 		if (-d $folder . '/' . $de) {
+			
 			# Folder, do recursion
 			readdirs($folder . '/' . $de, $filelist_ref);
 			print '.';
 
 		} elsif ($de =~ /\.sid$/i) {
-			# SID file, add to array
-			open(my $FILE, '<:raw:encoding(cp1252)', $folder . '/' . $de);
+			
+			# SID file
+			open(my $FILE, '<:raw', $folder . '/' . $de);
 			read($FILE, my $filecontent, 118);
 			close($FILE);
 			
-			substr($filecontent, 86, 32) =~ /(\d{2,4}\?{0,2})/;
-			my $sidfile_time = $1;
+			my $sidfile_released = FileContentParse($filecontent, 86, 32);
+
+			# 86=0x56 'released' (We only evaluate the first 4 year-digits)
+			# We expect to find four digits with maybe question mark on the last two digits
+			my $sidfile_time = ($sidfile_released =~ /^(\d{2}[\d\?]{2})/) ? $1 : '1982 Non-conforming';
 			
-			# Sidfiles are really not very consistent on dating, so we try to correct before converting to date
-			$sidfile_time = 2000 if ($sidfile_time eq "200?");
-			$sidfile_time = 1990 if ($sidfile_time eq "199?");
-			$sidfile_time = 1982 if (($sidfile_time eq "198?") || ($sidfile_time eq "19??"));
-			$sidfile_time = $sidfile_time + 1900 if (($sidfile_time > 50) && ($sidfile_time < 100));
-			$sidfile_time = $sidfile_time + 2000 if (($sidfile_time < 50) && ($sidfile_time >= 0));
+			# We have to set a value to non-specific dates for sorting, so correct as best we can
+			$sidfile_time = 2000 if ($sidfile_time eq '200?');
+			$sidfile_time = 1990 if ($sidfile_time eq '199?');
+			$sidfile_time = 1982 if (($sidfile_time eq '198?') || ($sidfile_time eq '19??'));
 			
 			# Convert to unix time
 			my $sidfile_time_seconds = timelocal(0, 0, 12, 1, 0, $sidfile_time);
 			
 			# Build output for html file
 			my $sidfile_line_year = DateConversion($sidfile_time_seconds);
-			my $sidfile_line_title = FileContentParse($filecontent, 22, 32);
-			my $sidfile_line_title_link = '<a href="' . $folder . '/' . $de . '">' . HtmlWash($sidfile_line_title) . '</a>';
-			my $sidfile_line_author = FileContentParse($filecontent, 54, 32);
+			
+			# 22=0x16 'name'
+			my $sidfile_title = FileContentParse($filecontent, 22, 32);
+			my $sidfile_line_title_link = '<a href="' . $folder . '/' . $de . '">' . encode_entities($sidfile_title) . '</a>';
+			
+			# 54=0x36 'author'
+			my $sidfile_author = encode_entities(FileContentParse($filecontent, 54, 32));
 			my $sidfile_line_folder  = $folder . '/';
-			my $sidfile_line_folder_link  = '<a href="' . $sidfile_line_folder . '" target="_blank">' . HtmlWash($sidfile_line_folder) . '</a>';
+			my $sidfile_line_folder_link  = '<a href="' . uri_escape($sidfile_line_folder) . '" target="_blank">' . encode_entities($sidfile_line_folder) . '</a>';
 			my $sidfile_line_songlength  = '[songlength:/' . $folder . '/' . $de . ']';
 			
 			# Format content and Add to array
@@ -195,7 +204,7 @@ sub readdirs {
 			$listentry .= '<td class="id">[id]</td>';
 			$listentry .= '<td class="released">' . $sidfile_line_year . '</td>';
 			$listentry .= '<td class="title">' . $sidfile_line_title_link . '</td>';
-			$listentry .= '<td class="author">' . HtmlWash($sidfile_line_author) . '</td>';
+			$listentry .= '<td class="author">' . $sidfile_author . '</td>';
 			$listentry .= '<td class="folder">' . $sidfile_line_folder_link . '</td>';
 			$listentry .= '<td class="songlength">' . $sidfile_line_songlength . '</td>';
 			$listentry .= '</tr>' . "\n";
@@ -212,9 +221,11 @@ sub FileContentParse {
 	my($filecontent, $start, $length) = @_;
 	
 	my $content = substr($filecontent, $start, $length);
-	$content =~ s/\0//gi;
 	
-	return($content);	
+	# Zero-byte trail, trim these from content
+	$content =~ s/\x00+$//g;
+	
+	return(decode('cp1252', $content));	
 }
 
 
@@ -224,6 +235,7 @@ sub DateConversion {
 	
 	my @td = gmtime($seconds);
 	
+	# Return only year YYYY
 	return ($td[5] + 1900);
 }
 
@@ -231,16 +243,7 @@ sub DateConversion {
 
 sub FormatTime {
 	my(@td) = localtime(time());
+	
+	# Return YYYY-MM-DD hh-mm-ss
 	return sprintf("%04d-%02d-%02d %02d:%02d:%02d", $td[5] + 1900, $td[4] + 1, $td[3], $td[2], $td[1], $td[0]);
-}
-
-
-
-sub HtmlWash {
-	my($text) = @_;
-	
-	$text =~ s/</&lt;/gi;
-	$text =~ s/>/&gt;/gi;
-	
-	return $text;
 }
